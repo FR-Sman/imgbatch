@@ -1,0 +1,154 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -u
+
+APP_NAME="ImageBatch"
+OUT="$HOME/storage/downloads/imgbatch"
+mkdir -p "$OUT"
+
+command -v magick >/dev/null 2>&1 || {
+    echo "ImageMagick is not installed."
+    echo "Run: pkg install imagemagick"
+    exit 1
+}
+
+has_storage() {
+    [ -d "$HOME/storage/downloads" ]
+}
+
+pause() {
+    echo
+    read -r -p "Press Enter to continue..." _
+}
+
+pick_input() {
+    echo
+    read -r -p "Input folder: " INPUT
+    [ -d "$INPUT" ] || { echo "Folder not found."; return 1; }
+}
+
+list_images() {
+    find "$1" -maxdepth 1 -type f \( \
+        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o \
+        -iname "*.webp" -o -iname "*.gif" -o -iname "*.bmp" -o \
+        -iname "*.tif" -o -iname "*.tiff" \
+    \)
+}
+
+resize_images() {
+    pick_input || return
+    read -r -p "Width (example 1920, blank = keep): " W
+    read -r -p "Height (example 1080, blank = keep): " H
+    read -r -p "Keep aspect ratio? [Y/n]: " KEEP
+    KEEP="${KEEP:-Y}"
+
+    mkdir -p "$OUT/resize"
+    while IFS= read -r -d '' file; do
+        name="$(basename "$file")"
+        ext="${name##*.}"
+        if [ -n "$W" ] && [ -n "$H" ]; then
+            if [[ "$KEEP" =~ ^[Yy]$ ]]; then size="${W}x${H}"; else size="${W}x${H}!"; fi
+        elif [ -n "$W" ]; then
+            size="${W}x"
+        elif [ -n "$H" ]; then
+            size="x${H}"
+        else
+            echo "No size entered."; return
+        fi
+        magick "$file" -resize "$size" "$OUT/resize/$name"
+    done < <(list_images "$INPUT" -print0)
+    echo "Done: $OUT/resize"
+}
+
+convert_images() {
+    pick_input || return
+    read -r -p "Output format (jpg/png/webp/gif/bmp/tiff): " FORMAT
+    FORMAT="${FORMAT#.}"
+    mkdir -p "$OUT/convert"
+    while IFS= read -r -d '' file; do
+        base="$(basename "${file%.*}")"
+        magick "$file" "$OUT/convert/$base.$FORMAT"
+    done < <(list_images "$INPUT" -print0)
+    echo "Done: $OUT/convert"
+}
+
+watermark_images() {
+    pick_input || return
+    read -r -p "Watermark image path: " WM
+    [ -f "$WM" ] || { echo "Watermark not found."; return; }
+    read -r -p "Opacity 0-100 [50]: " OP
+    OP="${OP:-50}"
+    mkdir -p "$OUT/watermark"
+    while IFS= read -r -d '' file; do
+        name="$(basename "$file")"
+        magick "$file" \( "$WM" -alpha set -channel A -evaluate set "${OP}%" +channel \) \
+            -gravity southeast -geometry +20+20 -composite "$OUT/watermark/$name"
+    done < <(list_images "$INPUT" -print0)
+    echo "Done: $OUT/watermark"
+}
+
+crop_images() {
+    pick_input || return
+    read -r -p "Crop width: " W
+    read -r -p "Crop height: " H
+    mkdir -p "$OUT/crop"
+    while IFS= read -r -d '' file; do
+        name="$(basename "$file")"
+        magick "$file" -gravity center -crop "${W}x${H}+0+0" +repage "$OUT/crop/$name"
+    done < <(list_images "$INPUT" -print0)
+    echo "Done: $OUT/crop"
+}
+
+remove_metadata() {
+    pick_input || return
+    mkdir -p "$OUT/clean"
+    while IFS= read -r -d '' file; do
+        name="$(basename "$file")"
+        magick "$file" -strip "$OUT/clean/$name"
+    done < <(list_images "$INPUT" -print0)
+    echo "Done: $OUT/clean"
+}
+
+compress_images() {
+    pick_input || return
+    read -r -p "JPEG quality 1-100 [80]: " QUALITY
+    QUALITY="${QUALITY:-80}"
+    mkdir -p "$OUT/compress"
+    while IFS= read -r -d '' file; do
+        name="$(basename "$file")"
+        magick "$file" -strip -quality "$QUALITY" "$OUT/compress/$name"
+    done < <(list_images "$INPUT" -print0)
+    echo "Done: $OUT/compress"
+}
+
+while true; do
+    clear
+    echo "======================================"
+    echo "             ImageBatch"
+    echo "      Offline ImageMagick Panel"
+    echo "======================================"
+    echo
+    echo "1) Resize many images"
+    echo "2) Convert format"
+    echo "3) Add watermark"
+    echo "4) Crop many images"
+    echo "5) Remove metadata"
+    echo "6) Compress images"
+    echo "7) Open export folder"
+    echo "0) Exit"
+    echo
+    echo "Export: $OUT"
+    echo
+    read -r -p "Choose: " CHOICE
+
+    case "$CHOICE" in
+        1) resize_images; pause ;;
+        2) convert_images; pause ;;
+        3) watermark_images; pause ;;
+        4) crop_images; pause ;;
+        5) remove_metadata; pause ;;
+        6) compress_images; pause ;;
+        7) termux-open "$OUT" 2>/dev/null || echo "$OUT"; pause ;;
+        0) exit 0 ;;
+        *) echo "Invalid option."; pause ;;
+    esac
+done
